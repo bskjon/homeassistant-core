@@ -52,6 +52,9 @@ PyViCare==2.16.2
 # homeassistant.components.xiaomi_aqara
 PyXiaomiGateway==0.13.4
 
+# homeassistant.components.elvia
+Pykson==0.9.9.8.7
+
 # homeassistant.components.remember_the_milk
 RtmAPI==0.7.2
 
@@ -169,6 +172,9 @@ aioharmony==0.2.9
 
 # homeassistant.components.homekit_controller
 aiohomekit==1.5.1
+
+# homeassistant.components.elvia
+aiohttp==3.8.1
 
 # homeassistant.components.emulated_hue
 # homeassistant.components.http
@@ -346,6 +352,9 @@ asterisk_mbox==0.5.0
 # homeassistant.components.upnp
 # homeassistant.components.yeelight
 async-upnp-client==0.31.2
+
+# homeassistant.components.elvia
+asyncio==3.4.3
 
 # homeassistant.components.supla
 asyncpysupla==0.0.5
@@ -2417,6 +2426,9 @@ upcloud-api==2.0.0
 # homeassistant.components.syncthru
 # homeassistant.components.zwave_me
 url-normalize==1.4.3
+
+# homeassistant.components.elvia
+urllib3==1.26.12
 
 # homeassistant.components.uscis
 uscisstatus==0.1.1
