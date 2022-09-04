@@ -5,15 +5,16 @@
         },
         "error": {
             "cannot_connect": "Failed to connect",
+            "forbidden_call": "You are not autheroized to obtain data",
             "invalid_auth": "Invalid authentication",
             "unknown": "Unexpected error"
         },
         "step": {
             "user": {
                 "data": {
-                    "host": "Host",
-                    "password": "Password",
-                    "username": "Username"
+                    "access_token": "Access Token",
+                    "include_production_to_grid": "Production (solar or other) to grid",
+                    "meter_id": "Meter id"
                 }
             }
         }

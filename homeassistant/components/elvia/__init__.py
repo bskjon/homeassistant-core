@@ -1,12 +1,16 @@
 """The elvia integration."""
 from __future__ import annotations
 
+import asyncio
+
 # from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 
-from .const import DOMAIN
+from .const import DOMAIN, TOKEN
+from .elvia import Elvia
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
@@ -15,13 +19,17 @@ PLATFORMS: list[Platform] = [Platform.SENSOR]
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up elvia from a config entry."""
 
-    hass.data.setdefault(DOMAIN, {})
-    # TODO 1. Create API instance
-    # TODO 2. Validate the API connection (and authentication)
-    # TODO 3. Store an API object for your platforms to access
-    # hass.data[DOMAIN][entry.entry_id] = MyApi(...)
+    elvia = Elvia(entry.data[TOKEN])
+    hass.data[DOMAIN] = elvia
 
-    hass.config_entries.async_setup_platforms(entry, PLATFORMS)
+    try:
+        await elvia.update_meters()
+    except asyncio.TimeoutError as err:
+        raise ConfigEntryNotReady from err
+
+    # IF NEEDED: entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _close))
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # hass.config_entries.async_setup_platforms(entry, PLATFORMS)
 
     return True
 

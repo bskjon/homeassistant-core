@@ -3,15 +3,16 @@
     "step": {
       "user": {
         "data": {
-          "host": "[%key:common::config_flow::data::host%]",
-          "username": "[%key:common::config_flow::data::username%]",
-          "password": "[%key:common::config_flow::data::password%]"
+          "access_token": "[%key:common::config_flow::data::access_token%]",
+          "meter_id": "Meter id",
+          "include_production_to_grid": "Production (solar or other) to grid"
         }
       }
     },
     "error": {
       "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
       "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
+      "forbidden_call": "You are not autheroized to obtain data",
       "unknown": "[%key:common::config_flow::error::unknown%]"
     },
     "abort": {

@@ -1,7 +1,6 @@
 """Config flow for elvia integration."""
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
@@ -12,7 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 
-from .const import DOMAIN, INCLUDE_PRODUCTION_TO_GRID, METER_ID, METER_READING, TOKEN
+from .const import DOMAIN, INCLUDE_PRODUCTION_TO_GRID, METER_ID, TOKEN
 from .elvia import Elvia
 
 _LOGGER = logging.getLogger(__name__)
@@ -22,27 +21,11 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(TOKEN): str,
         vol.Optional(METER_ID): list[str],
-        vol.Optional(INCLUDE_PRODUCTION_TO_GRID): str,
-        vol.Optional(METER_READING): bool
+        vol.Optional(INCLUDE_PRODUCTION_TO_GRID): str
         #        vol.Required("username"): str,
         #        vol.Required("password"): str,
     }
 )
-
-
-class PlaceholderHub:
-    """Placeholder class to make tests pass.
-
-    TODO Remove this placeholder class and replace with things from your PyPI package.
-    """
-
-    def __init__(self, token: str) -> None:
-        """Initialize."""
-        self.token = token
-
-    async def authenticate(self) -> bool:
-        """Return True. Placeholder call for example."""
-        return True
 
 
 # pylint: disable=fixme
@@ -58,8 +41,8 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     # await hass.async_add_executor_job(
     #     your_validate_func, data["username"], data["password"]
     # )
-
-    result = await asyncio.wait_for(Elvia(data[TOKEN]).get_max_hours(), 1000)
+    result = await Elvia(data[TOKEN]).get_meters()
+    # result: ElviaData = await asyncio.run(Elvia(data[TOKEN]).get_meters(), 1000)
 
     if result.status_code == 401:
         raise InvalidAuthenticationToken
@@ -74,7 +57,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     # InvalidAuth
 
     # Return info that you want to store in the config entry.
-    return {"title": "Name of the device"}
+    return {"token": data[TOKEN]}
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
