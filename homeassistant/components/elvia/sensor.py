@@ -57,7 +57,6 @@ async def async_setup_entry(
             if len(meter.maxHoursAggregate) > 0:
                 max_hours_current: maxHourAggregate = meter.maxHoursAggregate[0]
                 for peak_max in max_hours_current.maxHours:
-                    print(peak_max)
                     peak_max_index = max_hours_current.maxHours.index(peak_max)
                     entities.append(
                         ElviaMaxHourPeakSensor(
@@ -124,9 +123,6 @@ class ElviaMaxHourFixedLevelSensor(ElviaSensor):
                 day=1, month=1, year=1970, hour=0, minute=0, second=1, microsecond=0
             )
         )
-
-        if end_time is not None:
-            print("Org", self._attr_extra_state_attributes["end_time"], " Parsed ", dts)
 
         allow_new_pull = dts + timedelta(hours=1)
         max_hours: meteringPointV2
@@ -197,9 +193,6 @@ class ElviaMaxHourPeakSensor(ElviaSensor):
                 day=1, month=1, year=1970, hour=0, minute=0, second=1, microsecond=0
             )
         )
-
-        if end_time is not None:
-            print("Org", self._attr_extra_state_attributes["end_time"], " Parsed ", dts)
 
         allow_new_pull: datetime = dts + timedelta(hours=1)
         max_hours: meteringPointV2
