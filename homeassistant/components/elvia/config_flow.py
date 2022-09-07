@@ -10,8 +10,9 @@ from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import config_validation as cv
 
-from .const import DOMAIN, INCLUDE_PRODUCTION_TO_GRID, METER_ID, TOKEN
+from .const import DOMAIN, INCLUDE_PRODUCTION_TO_GRID, TOKEN
 from .elvia import Elvia
 
 _LOGGER = logging.getLogger(__name__)
@@ -19,9 +20,9 @@ _LOGGER = logging.getLogger(__name__)
 
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
-        vol.Required(TOKEN): str,
-        vol.Optional(METER_ID): list[str],
-        vol.Optional(INCLUDE_PRODUCTION_TO_GRID): str
+        vol.Required(TOKEN): cv.string,
+        #        vol.Optional(METER_ID, default=[]),
+        vol.Optional(INCLUDE_PRODUCTION_TO_GRID, default=False): cv.boolean
         #        vol.Required("username"): str,
         #        vol.Required("password"): str,
     }
@@ -41,6 +42,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     # await hass.async_add_executor_job(
     #     your_validate_func, data["username"], data["password"]
     # )
+
     result = await Elvia(data[TOKEN]).get_meters()
     # result: ElviaData = await asyncio.run(Elvia(data[TOKEN]).get_meters(), 1000)
 
@@ -57,7 +59,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     # InvalidAuth
 
     # Return info that you want to store in the config entry.
-    return {"token": data[TOKEN]}
+    return {"title": "elvia", "token": data[TOKEN]}
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -78,6 +80,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         try:
             info = await validate_input(self.hass, user_input)
+            return self.async_create_entry(title=info["title"], data=user_input)
         except CannotConnect:
             errors["base"] = "cannot_connect"
         except InvalidAuthenticationToken:
@@ -87,8 +90,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         except Exception:  # pylint: disable=broad-except
             _LOGGER.exception("Unexpected exception")
             errors["base"] = "unknown"
-        else:
-            return self.async_create_entry(title=info["title"], data=user_input)
 
         return self.async_show_form(
             step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors

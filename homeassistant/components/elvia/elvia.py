@@ -1,7 +1,6 @@
 """elvia communication."""
 from __future__ import annotations
 
-import asyncio
 import datetime
 from typing import Any
 import urllib.error
@@ -98,7 +97,7 @@ class Elvia:
 
     async def update_meters(self) -> None:
         """Return None. Executes request for meter ids."""
-        meter_data = asyncio.run(self.get_meters())
+        meter_data = await self.get_meters()
         self.meter = meter_data
 
     async def update_max_hours(self) -> None:
@@ -138,7 +137,7 @@ class Elvia:
         meters = meter_values.meteringpoints
         meter_ids = [item.metering_point_id for item in meters]
 
-        return Meter(response.status_code == 200, meter_ids)
+        return Meter(response.status_code, meter_ids)
 
     # pylint: disable=dangerous-default-value
     async def get_meter_values(

@@ -25,6 +25,12 @@ class maxHour(JsonObject):
     production = BooleanField(serialized_name="production")
     verified = BooleanField(serialized_name="verified")
 
+    def __str__(self) -> str:
+        """Override default str in order to get data as a string."""
+        return "startTime: {startTime}, endTime: {endTime}, value: {value}".format(
+            startTime=self.startTime, endTime=self.endTime, value=str(self.value)
+        )
+
 
 # pylint: disable=invalid-name
 class maxHourAggregate(JsonObject):

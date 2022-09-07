@@ -2,7 +2,7 @@
 
 DOMAIN = "elvia"
 
-TOKEN = "token"
-METER_ID = "meterId"
-INCLUDE_PRODUCTION_TO_GRID = "IncludeProductionToGrid"
+TOKEN = "access_token"
+METER_ID = "meter_id"
+INCLUDE_PRODUCTION_TO_GRID = "include_production_to_grid"
 METER_READING = "MeterReading"

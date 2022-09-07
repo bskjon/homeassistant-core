@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 
 from homeassistant.components.number import NumberEntity
@@ -23,6 +22,8 @@ from .elvia import CostTimeSpan, Elvia
 from .elvia_schema import MaxHours, maxHourAggregate, meteringPointV2
 
 _LOGGER = logging.getLogger(__name__)
+
+datetime_format: str = "%Y-%m-%dT%H:%M:%S%z"
 
 
 # https://github.com/adafycheng/home-assistant-components/blob/main/dummy-garage/homeassistant/components/dummy_garage/sensor.py
@@ -45,7 +46,8 @@ async def async_setup_entry(
     # device_registry = async_get_dev_reg(hass)
     entities: list[ElviaSensor] = []
 
-    max_hours_data = asyncio.run(elvia.get_max_hours()).data
+    setup_data = await elvia.get_max_hours()
+    max_hours_data = setup_data.data
     maxhours: MaxHours
     if isinstance(max_hours_data, MaxHours):
         maxhours = max_hours_data
@@ -55,10 +57,14 @@ async def async_setup_entry(
             if len(meter.maxHoursAggregate) > 0:
                 max_hours_current: maxHourAggregate = meter.maxHoursAggregate[0]
                 for peak_max in max_hours_current.maxHours:
+                    print(peak_max)
                     peak_max_index = max_hours_current.maxHours.index(peak_max)
                     entities.append(
                         ElviaMaxHourPeakSensor(
-                            elvia, "maxHour_" + str(peak_max_index), meter_id
+                            elvia,
+                            "maxHour_" + str(peak_max_index),
+                            meter_id,
+                            peak_max_index,
                         )
                     )
                 entities.append(
@@ -79,7 +85,14 @@ class ElviaSensor(SensorEntity):
         self.elvia_instance = elvia_instance
         self._name = "elvia_" + meter_id + "_" + name
         self._attr_name = self.name
-        self._attr_unique_id = meter_id
+        self._attr_unique_id = meter_id + "_" + name
+
+    def meter_id_from_unique_id(self) -> str | None:
+        """Obtain meter id from unique id."""
+        if self.unique_id is None:
+            return None
+        uid = self.unique_id.split("_")[0]
+        return uid
 
 
 class ElviaMaxHourFixedLevelSensor(ElviaSensor):
@@ -97,14 +110,25 @@ class ElviaMaxHourFixedLevelSensor(ElviaSensor):
             "start_time": None,
             "end_time": None,
             "calculated_time": None,
+            "grid_level": None,
         }
 
     async def async_update(self) -> None:
         """Fetch new values for the sensor."""
-
         now = dt_util.now()
-        dts: datetime = self._attr_extra_state_attributes["end_time"]
-        allow_new_pull: datetime = dts + timedelta(hours=1)
+        end_time = self._attr_extra_state_attributes["end_time"]
+        dts: datetime = (
+            datetime.strptime(end_time, datetime_format)
+            if end_time is not None
+            else datetime.now(timezone.utc).replace(
+                day=1, month=1, year=1970, hour=0, minute=0, second=1, microsecond=0
+            )
+        )
+
+        if end_time is not None:
+            print("Org", self._attr_extra_state_attributes["end_time"], " Parsed ", dts)
+
+        allow_new_pull = dts + timedelta(hours=1)
         max_hours: meteringPointV2
         max_hours_current: maxHourAggregate
 
@@ -116,7 +140,7 @@ class ElviaMaxHourFixedLevelSensor(ElviaSensor):
                 (
                     meter_max
                     for meter_max in max_from_meters
-                    if meter_max.meteringPointId == self.unique_id
+                    if meter_max.meteringPointId == self.meter_id_from_unique_id()
                 ),
                 None,
             )
@@ -143,9 +167,14 @@ class ElviaMaxHourFixedLevelSensor(ElviaSensor):
 class ElviaMaxHourPeakSensor(ElviaSensor):
     """Sensor for max hours."""
 
-    def __init__(self, elvia_instance: Elvia, name: str, meter_id: str) -> None:
+    peak_index: int
+
+    def __init__(
+        self, elvia_instance: Elvia, name: str, meter_id: str, peak_index: int = 0
+    ) -> None:
         """Class init. Default assignment."""
         super().__init__(elvia_instance, name, meter_id)
+        self.peak_index = peak_index
 
         self._attr_state_class = SensorStateClass.TOTAL
         self._attr_native_unit_of_measurement = ENERGY_KILO_WATT_HOUR
@@ -154,14 +183,24 @@ class ElviaMaxHourPeakSensor(ElviaSensor):
         self._attr_extra_state_attributes = {
             "start_time": None,
             "end_time": None,
-            "calculated_time": None,
         }
 
     async def async_update(self) -> None:
         """Fetch new values for the sensor."""
 
         now = dt_util.now()
-        dts: datetime = self._attr_extra_state_attributes["end_time"]
+        end_time = self._attr_extra_state_attributes["end_time"]
+        dts: datetime = (
+            datetime.strptime(end_time, datetime_format)
+            if end_time is not None
+            else datetime.now(timezone.utc).replace(
+                day=1, month=1, year=1970, hour=0, minute=0, second=1, microsecond=0
+            )
+        )
+
+        if end_time is not None:
+            print("Org", self._attr_extra_state_attributes["end_time"], " Parsed ", dts)
+
         allow_new_pull: datetime = dts + timedelta(hours=1)
         max_hours: meteringPointV2
         max_hours_current: maxHourAggregate
@@ -174,26 +213,22 @@ class ElviaMaxHourPeakSensor(ElviaSensor):
                 (
                     meter_max
                     for meter_max in max_from_meters
-                    if meter_max.meteringPointId == self.unique_id
+                    if meter_max.meteringPointId == self.meter_id_from_unique_id()
                 ),
                 None,
             )
             if max_hours_found is None:
                 return
             max_hours = max_hours_found
-            max_hours_current = max_hours.maxHoursAggregate[0]
+            max_hours_current = max_hours.maxHoursAggregate[0].maxHours[self.peak_index]
 
         else:
             return
 
-        self._attr_native_value = max_hours_current.averageValue  # Nettleie nivå her
+        self._attr_native_value = max_hours_current.value
         self._attr_extra_state_attributes = {
             "start_time": max_hours.maxHoursFromTime,
             "end_time": max_hours.maxHoursToTime,
-            "calculated_time": max_hours.maxHoursCalculatedTime,
-            "grid_level": self.elvia_instance.get_grid_level(
-                max_hours_current.averageValue
-            ),
         }
 
 
