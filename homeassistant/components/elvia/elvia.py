@@ -10,7 +10,7 @@ import urllib.request
 import aiohttp
 from pykson import Pykson
 
-from .elvia_schema import MaxHours, MeterValues
+from .elvia_schema import MaxHours, MeterValues, maxHourAggregate, meteringPointV2
 
 
 class ElviaWebResponse:
@@ -191,6 +191,33 @@ class Elvia:
         max_hours: MaxHours = Pykson().from_json(response.json, MaxHours)
         return ElviaData(response.status_code, max_hours)
 
+    def extract_max_hours(
+        self, meter_id: str, mtrpoints: list[meteringPointV2]
+    ) -> meteringPointV2 | None:
+        """Return meteringPointV2 based on meter id."""
+        return next(
+            (
+                meter_max
+                for meter_max in mtrpoints
+                if meter_max.meteringPointId == meter_id
+            ),
+            None,
+        )
+
+    def extract_max_hours_current(
+        self, point: meteringPointV2
+    ) -> maxHourAggregate | None:
+        """Return current maxHourAggregate.
+
+        Return will be of None if data is None or noOfMonthsBack is not 0.
+        """
+        data = (
+            None
+            if point is None or len(point.maxHoursAggregate) == 0
+            else point.maxHoursAggregate[0]
+        )
+        return None if data is None or data.noOfMonthsBack != 0 else data
+
     def get_grid_level(self, kw: float) -> int:
         """Calculate the grid level based on kwh."""
         if kw <= 2:
@@ -225,28 +252,18 @@ class Elvia:
             "weekend": CostTimeSpan(0, 0, cost=36.85),
         }
 
-    def get_cost_period_now(self) -> CostTimeSpan:
+    def get_cost_period_now(self, now: datetime.datetime) -> CostTimeSpan | None:
         """Return fixed grid cost for the current time."""
         periods = self.get_cost_periods()
-        now = datetime.datetime.now()
         cost_time_span: CostTimeSpan
         if now.isoweekday() in [6, 7]:
             cost_time_span = periods["weekend"]
         elif now.hour >= periods["day"].start_time and (
-            now.hour <= periods["day"].end_time and now.minute == 0
+            now.hour < periods["day"].end_time
+            or (now.hour == periods["day"].end_time and now.minute == 0)
         ):
             cost_time_span = periods["day"]
         else:
             cost_time_span = periods["night"]
 
         return cost_time_span
-
-
-# if __name__ == "__main__":
-#     TOKEN = "eyJhbGciOiJSUzI1NiIsImtpZCI6IjVBMkIwMDFBODEzRkE3N0E5M0UxNERDNjU4QTNERjY1REIzRDFEM0VSUzI1NiIsInR5cCI6ImF0K2p3dCIsIng1dCI6Ildpc0FHb0VfcDNxVDRVM0dXS1BmWmRzOUhUNCJ9.eyJuYmYiOjE2NjE3ODczMTUsImV4cCI6MTgxOTQ2NzMxNSwiaXNzIjoiaHR0cHM6Ly9lbHZpZC5lbHZpYS5pbyIsImNsaWVudF9pZCI6IjU4ZmQ3Y2M3LTUyNzktNDYyZS05ZDg4LTEwNWM2MjU3OThiNiIsInN1YiI6IjcxODBjOGE2LWY3NTctNDJiMy1iZTFiLTQ4Yjg1MzhkMWFhMyIsImF1dGhfdGltZSI6MTY2MTc4NzMxNCwiaWRwIjoibG9jYWwiLCJiYW5raWRfcGlkIjoiOTU3OC01OTk5LTQtMzc4NDEzNSIsInRva2VuX2lkIjoiZmZmMDg2NTktMGEzZS00ZDAzLWE2MzMtMmUyODhmY2Q5YzAzIiwiaWF0IjoxNjYxNzg3MzE1LCJzY29wZSI6WyJrdW5kZS5hY2Nlc3MtaW5mb3JtYXRpb24uZGVsZWdhdGVkLXVzZXJhY2Nlc3MiLCJrdW5kZS5kZWxlZ2F0ZWQtdXNlcmFjY2VzcyIsImt1bmRlLm1ldGVydmFsdWVzLmRlbGVnYXRlZC11c2VyYWNjZXNzIl0sImFtciI6WyJkZWxlZ2F0aW9uIl19.i82Q64er_pFuvqc_emDISHPJK_cVt7tNMuNJMHB-Pq6kjHFsMZkkN81lei_g30pARWMe_bpH9N9qnzguIQ2WAlg9x6o1YPfl5OdTcRoBtv10YJd_N9gedDr6IURoC8I4XtZjuUsSBZeT-g0sRtBUFcO481eMpDTb_yHYL3RbKnORXaJeYGRzELqfP187_7eCJAw-8avSsom8aWx_-YAN1_iIiqnCMGI6Xsu6_bq0pYtE8LJo3w8zX1EtbRoXmWp_1j4NUGi_1W2WdR2S1fyGNu8HbggYx7d7tNQwzhp4ArBt6u810z3_9aKNjVUaLkr13eUumEKv_IjOfOLmoVcbIw"
-#     el = Elvia(TOKEN)
-#     print(asyncio.run(el.get_meters()).meter_ids)
-#     meterValue: MeterValues = asyncio.run(el.get_meter_values()).data
-#     maxHours: MaxHours = asyncio.run(el.get_max_hours()).data
-#     print(maxHours.meteringpoints[0].maxHoursAggregate[0].averageValue)
-#     print(maxHours)
