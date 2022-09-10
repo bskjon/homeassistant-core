@@ -121,10 +121,15 @@ class Elvia:
     async def get_meters(self) -> Meter:
         """Return Meter with owned meter ids."""
         now = datetime.datetime.now(datetime.timezone.utc).replace(
-            hour=0, minute=0, second=1, microsecond=0
+            hour=0, minute=0, second=0, microsecond=0
         )
 
-        params = urllib.parse.urlencode({"startTime": now.isoformat()})
+        params = urllib.parse.urlencode(
+            {
+                "startTime": now.isoformat(),
+                "endTime": (now + datetime.timedelta(hours=1)).isoformat(),
+            }
+        )
 
         response: ElviaWebResponse = await self.request_elvia_for_response(
             "/customer/metervalues/api/v1/metervalues?%s" % params
