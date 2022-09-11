@@ -12,13 +12,26 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ENERGY_KILO_WATT_HOUR
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_registry import (  # async_get as async_get_entity_reg,
+    EntityRegistry,
+)
+from homeassistant.helpers.update_coordinator import (
+    CoordinatorEntity,
+    DataUpdateCoordinator,
+)
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
-from .elvia import CostTimeSpan, Elvia
-from .elvia_schema import MaxHours, maxHour, maxHourAggregate, meteringPointV2
+from .const import COST_PERIOD, DOMAIN, MAX_HOURS, METER, METER_READING, TOKEN
+from .elvia import CostTimeSpan, Elvia, ElviaApi, Meter
+from .elvia_schema import (
+    MaxHours,
+    MeterValues,
+    maxHour,
+    maxHourAggregate,
+    meteringPointV2,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,82 +41,174 @@ datetime_format: str = "%Y-%m-%dT%H:%M:%S%z"
 # https://github.com/adafycheng/home-assistant-components/blob/main/dummy-garage/homeassistant/components/dummy_garage/sensor.py
 
 
+def entity_exists(reg: EntityRegistry, uid) -> bool:
+    """Check if entity is already added."""
+    fuid = reg.async_get_entity_id("sensor", DOMAIN, uid)
+    print("Uid", uid, "fuid", fuid)
+    return fuid is not None
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     """Set up Elvia Sensor."""
-    elvia: Elvia = hass.data[DOMAIN]
+    elvia_api: ElviaApi = ElviaApi(hass.data[TOKEN])
 
-    # device_registry = async_get_dev_reg(hass)
+    max_hours: bool = hass.data[MAX_HOURS]
+    meter_reading: bool = hass.data[METER_READING]
+    cost_period: bool = hass.data[COST_PERIOD]
+
+    coordinator = ElviaCoordinator(
+        hass, elvia_api, max_hours=max_hours, meter_reading=meter_reading
+    )
+    await coordinator.async_config_entry_first_refresh()
+
+    #    entity_registry = async_get_entity_reg(hass)
+
     entities: list[ElviaSensor] = []
 
-    entities.append(ElviaEnergyFixedLinkSensor(elvia, "Grid Cost Period"))
+    if cost_period:
+        entities.append(ElviaEnergyFixedLinkSensor("Grid Cost Period"))
 
-    entities.extend(
-        await async_create_max_hours(
-            hass=hass, entry=entry, async_add_entities=async_add_entities, elvia=elvia
+    meter: Meter = hass.data[METER]
+    if max_hours and meter is not None:
+        entities.extend(
+            await async_create_max_hours(
+                hass=hass,
+                coordinator=coordinator,
+                meter=meter,
+            )
         )
-    )
 
+    #    entities_to_add = list(
+    #        filter(
+    #            lambda ent: entity_exists(entity_registry, ent.unique_id) is False,
+    #            entities,
+    #        )
+    #    )
+    #
+    #    for entity in entities:
+    #        if entity not in entities:
+    #            _LOGGER.info("Updating entity: ", entity.unique_id)
+    #            entity_registry.async_update_entity(entity_id=entity.unique_id)
+    #
+
+    # async_add_entities(entities_to_add, True)
+    for entity in entities:
+        if isinstance(entity, ElviaMeterSensor):
+            await entity.async_update()
     async_add_entities(entities, True)
 
 
 async def async_create_max_hours(
     hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-    elvia: Elvia,
+    coordinator: ElviaCoordinator,
+    meter: Meter,
 ) -> list[ElviaSensor]:
     """Return configured Elvia Max Hour entities."""
     entities: list[ElviaSensor] = []
 
-    setup_data = await elvia.get_max_hours()
-    max_hours_data = setup_data.data
-    maxhours: MaxHours
-    if isinstance(max_hours_data, MaxHours):
-        maxhours = max_hours_data
-        for meter in maxhours.meteringpoints:
-            meter_id = meter.meteringPointId
-            entities.append(ElviaMaxHourFixedLevelSensor(elvia, "Max Hours", meter_id))
-            entities.append(ElviaFixedGridLevelSensor(elvia, "Grid Level", meter_id))
-            if len(meter.maxHoursAggregate) > 0:
-                max_hours_current: maxHourAggregate = meter.maxHoursAggregate[0]
-                for peak_max in max_hours_current.maxHours:
-                    peak_max_index = max_hours_current.maxHours.index(peak_max)
-                    entities.append(
-                        ElviaMaxHourPeakSensor(
-                            elvia,
-                            "Max Hour " + str(peak_max_index),
-                            meter_id,
-                            peak_max_index,
-                        )
-                    )
+    _LOGGER.info("Using stored Meter for Elvia Max Hours")
+    _LOGGER.info("Creating Elvia Max Hours sensors")
+
+    for meter_id in meter.meter_ids:
+
+        # Elvia calculates peak values in 3 sets
+        # If elvia changes this, the integration has to be updated
+        for peak in range(3):
+            entities.append(
+                ElviaMaxHourPeakSensor(coordinator, f"Max Hour {peak}", meter_id, peak)
+            )
+        entities.append(
+            ElviaMaxHourFixedLevelSensor(coordinator, "Max Hours", meter_id)
+        )
+        entities.append(ElviaFixedGridLevelSensor(coordinator, "Grid Level", meter_id))
+
     return entities
+
+
+class ElviaCoordinator(DataUpdateCoordinator):
+    """Elvia Data Pull Coordinator.
+
+    Elvia might rete limit if data pull is too often...
+    """
+
+    elvia_api: ElviaApi
+    config_pull_max_hours: bool = False
+    config_pull_meter_reading: bool = False
+
+    data_max_hours: MaxHours
+    data_meter_reading: MeterValues
+
+    # https://developers.home-assistant.io/docs/integration_fetching_data/
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        elvia_api: ElviaApi,
+        max_hours: bool,
+        meter_reading: bool,
+    ) -> None:
+        """Initialize coordinator.
+
+        Fetching setting.
+        """
+        super().__init__(
+            hass=hass,
+            logger=_LOGGER,
+            name="Elvia Meter",
+            update_interval=timedelta(minutes=15),
+            update_method=self.async_elvia_pull,
+        )
+        self.elvia_api = elvia_api
+        self.config_pull_max_hours = max_hours
+        self.config_pull_meter_reading = meter_reading
+
+    async def async_elvia_pull(self) -> None:
+        """Fetch relevant data from elvia."""
+        if self.config_pull_max_hours:
+            result = await self.elvia_api.get_max_hours()
+            if isinstance(result.data, MaxHours):
+                self.data_max_hours = result.data
+        if self.config_pull_meter_reading:
+            result = await self.elvia_api.get_meter_values()
+            if isinstance(result.data, MeterValues):
+                self.data_meter_reading = result.data
 
 
 class ElviaSensor(SensorEntity):
     """Base sensor class."""
 
     _attr_has_entity_name: bool = True
-    elvia_instance: Elvia
 
-    def __init__(self, elvia_instance: Elvia) -> None:
+    def __init__(self) -> None:
         """Class init."""
-        self.elvia_instance = elvia_instance
         self._attr_extra_state_attributes = {}
 
 
-class ElviaMeterSensor(ElviaSensor):
+class ElviaMeterSensor(CoordinatorEntity, ElviaSensor):
     """Base meter sensor class."""
 
     _meter_id: str
+    _coordinator: ElviaCoordinator
 
-    def __init__(self, elvia_instance: Elvia, name: str, meter_id: str) -> None:
+    def __init__(
+        self,
+        coordinator: ElviaCoordinator,
+        name: str,
+        meter_id: str,
+    ) -> None:
         """Class init."""
-        super().__init__(elvia_instance)
+        super().__init__(coordinator)
+        self._coordinator = coordinator
         self._meter_id = meter_id
         self._attr_name = f"Elvia Meter {meter_id} {name}"
         self._attr_unique_id = f"elvia_meter_{meter_id}_{name}"
+
+        _LOGGER.info("Setting up %s", self._attr_unique_id)
+
+    async def async_update(self) -> None:
+        """Visibility."""
+        return await super().async_update()
 
     def get_meter_id(self) -> str | None:
         """Return meter id."""
@@ -119,6 +224,14 @@ class ElviaMeterSensor(ElviaSensor):
             return None
         uid = self.unique_id.split("_")[2]
         return uid
+
+    def get_max_hours(self) -> MaxHours | None:
+        """Return stored data of max hours."""
+        return self._coordinator.data_max_hours
+
+    def get_meter_readings(self) -> MeterValues | None:
+        """Return stored data of meter readings."""
+        return self._coordinator.data_meter_reading
 
     def get_attr_end_time(self) -> str | None:
         """Return end_time value from attribute or None."""
@@ -150,13 +263,29 @@ class ElviaMeterSensor(ElviaSensor):
         allow_new_pull: datetime = dts + timedelta(hours=1)
         return now >= allow_new_pull
 
+    def get_self_max_hours(self) -> meteringPointV2 | None:
+        """Return Max Hour for self meter id or None."""
+        all_max_hours = self.get_max_hours()
+        if all_max_hours is None:
+            _LOGGER.error("Elvia Max Hours is None")
+            return None
+
+        _meter_id = self.meter_id_from_unique_id()
+        if _meter_id is None:
+            _LOGGER.error("Could not find meter id")
+            return None
+
+        return Elvia().extract_max_hours(
+            meter_id=_meter_id, mtrpoints=all_max_hours.meteringpoints
+        )
+
 
 class ElviaValueSensor(ElviaSensor):
     """Base value sensor class."""
 
-    def __init__(self, elvia_instance: Elvia, name: str) -> None:
+    def __init__(self, name: str) -> None:
         """Class init. Default assignment."""
-        super().__init__(elvia_instance)
+        super().__init__()
 
         self._attr_state_class = SensorStateClass.TOTAL
         self._attr_name = name = f"Elvia {name}"
@@ -175,39 +304,38 @@ class ElviaFixedGridLevelSensor(ElviaMeterSensor):
     The fixed grid level resets every start of the month, but will only increase depending om Max Hours calculated.
     """
 
-    def __init__(self, elvia_instance: Elvia, name: str, meter_id: str) -> None:
+    def __init__(
+        self,
+        coordinator: ElviaCoordinator,
+        name: str,
+        meter_id: str,
+    ) -> None:
         """Class init. Default assignment."""
 
-        super().__init__(elvia_instance, name=name, meter_id=meter_id)
+        super().__init__(coordinator, name=name, meter_id=meter_id)
         self._attr_state_class = SensorStateClass.TOTAL_INCREASING
         self._attr_native_unit_of_measurement = "Level"
-        self._attr_native_value = 0
 
-    async def async_update(self) -> None:
-        """Fetch new values for the sensor."""
-
-        max_hours: meteringPointV2 | None
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle update from elvia."""
+        max_hours = self.get_self_max_hours()
         max_hours_current: maxHourAggregate | None
 
-        if self.can_pull_new_data() or self.elvia_instance.max_hours is None:
-            _LOGGER.debug("Asking for new data")
-            _meter_id = self.meter_id_from_unique_id()
-            if _meter_id is None:
-                return
-            await self.elvia_instance.update_max_hours()
-            max_hours = self.elvia_instance.extract_max_hours(
-                meter_id=_meter_id,
-                mtrpoints=self.elvia_instance.max_hours.meteringpoints,
-            )
-            if max_hours is None:
-                return
-            max_hours_current = self.elvia_instance.extract_max_hours_current(max_hours)
-            if max_hours_current is None:
-                return
-        else:
+        _LOGGER.info("Updating Elvia Grid Level")
+        elvia = Elvia()
+
+        _meter_id = self.meter_id_from_unique_id()
+        if _meter_id is None:
             return
 
-        self._attr_native_value = self.elvia_instance.get_grid_level(
+        if max_hours is None:
+            return
+        max_hours_current = elvia.extract_max_hours_current(max_hours)
+        if max_hours_current is None:
+            return
+
+        self._attr_native_value = elvia.get_grid_level(
             max_hours_current.averageValue
         )  # Nettleie nivå her
         self._attr_extra_state_attributes = {
@@ -215,6 +343,8 @@ class ElviaFixedGridLevelSensor(ElviaMeterSensor):
             "end_time": max_hours.maxHoursToTime,
             "calculated_time": max_hours.maxHoursCalculatedTime,
         }
+
+        return super()._handle_coordinator_update()
 
     @property
     def icon(self) -> str:
@@ -225,14 +355,18 @@ class ElviaFixedGridLevelSensor(ElviaMeterSensor):
 class ElviaMaxHourFixedLevelSensor(ElviaMeterSensor):
     """Sensor for max hours."""
 
-    def __init__(self, elvia_instance: Elvia, name: str, meter_id: str) -> None:
+    def __init__(
+        self,
+        coordinator: ElviaCoordinator,
+        name: str,
+        meter_id: str,
+    ) -> None:
         """Class init. Default assignment."""
-        super().__init__(elvia_instance, name=name, meter_id=meter_id)
+        super().__init__(coordinator, name=name, meter_id=meter_id)
 
         self._attr_state_class = SensorStateClass.TOTAL
         self._attr_native_unit_of_measurement = ENERGY_KILO_WATT_HOUR
 
-        self._attr_native_value = 0.0  # Nettleie nivå her
         self._attr_extra_state_attributes = {
             "start_time": None,
             "end_time": None,
@@ -240,28 +374,20 @@ class ElviaMaxHourFixedLevelSensor(ElviaMeterSensor):
             "grid_level": None,
         }
 
-    async def async_update(self) -> None:
-        """Fetch new values for the sensor."""
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle update from elvia."""
 
-        max_hours: meteringPointV2 | None
+        max_hours = self.get_self_max_hours()
         max_hours_current: maxHourAggregate | None
 
-        if self.can_pull_new_data() or self.elvia_instance.max_hours:
-            _LOGGER.debug("Asking for new data")
-            _meter_id = self.meter_id_from_unique_id()
-            if _meter_id is None:
-                return
-            await self.elvia_instance.update_max_hours()
-            max_hours = self.elvia_instance.extract_max_hours(
-                meter_id=_meter_id,
-                mtrpoints=self.elvia_instance.max_hours.meteringpoints,
-            )
-            if max_hours is None:
-                return
-            max_hours_current = self.elvia_instance.extract_max_hours_current(max_hours)
-            if max_hours_current is None:
-                return
-        else:
+        _LOGGER.info("Updating Elvia Max Hours")
+
+        if max_hours is None:
+            return
+
+        max_hours_current = Elvia().extract_max_hours_current(max_hours)
+        if max_hours_current is None:
             return
 
         self._attr_native_value = round(
@@ -272,6 +398,8 @@ class ElviaMaxHourFixedLevelSensor(ElviaMeterSensor):
             "end_time": max_hours.maxHoursToTime,
             "calculated_time": max_hours.maxHoursCalculatedTime,
         }
+
+        return super()._handle_coordinator_update()
 
     @property
     def icon(self) -> str:
@@ -285,57 +413,55 @@ class ElviaMaxHourPeakSensor(ElviaMeterSensor):
     peak_index: int
 
     def __init__(
-        self, elvia_instance: Elvia, name: str, meter_id: str, peak_index: int = 0
+        self,
+        coordinator: ElviaCoordinator,
+        name: str,
+        meter_id: str,
+        peak_index: int = 0,
     ) -> None:
         """Class init. Default assignment."""
 
         self.peak_index = peak_index
-        super().__init__(elvia_instance, name=name, meter_id=meter_id)
+        super().__init__(coordinator, name=name, meter_id=meter_id)
 
         self._attr_state_class = SensorStateClass.TOTAL
         self._attr_native_unit_of_measurement = ENERGY_KILO_WATT_HOUR
 
-        self._attr_native_value = 0.0  # Nettleie nivå her
         self._attr_extra_state_attributes = {
             "start_time": None,
             "end_time": None,
         }
 
-    async def async_update(self) -> None:
-        """Fetch new values for the sensor."""
-        max_hours: meteringPointV2 | None
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle update from elvia."""
+
+        max_hours = self.get_self_max_hours()
         peak_hour: maxHour
 
-        if self.can_pull_new_data() or self.elvia_instance.max_hours is None:
-            _LOGGER.debug("Asking for new data")
-            _meter_id = self.meter_id_from_unique_id()
-            if _meter_id is None:
-                return
-            await self.elvia_instance.update_max_hours()
-            max_hours = self.elvia_instance.extract_max_hours(
-                meter_id=_meter_id,
-                mtrpoints=self.elvia_instance.max_hours.meteringpoints,
-            )
-            if max_hours is None:
-                return
-            max_hours_current: maxHourAggregate | None = (
-                self.elvia_instance.extract_max_hours_current(max_hours)
-            )
-            if (
-                max_hours_current is None
-                or len(max_hours_current.maxHours) < self.peak_index
-            ):
-                return
-            peak_hour = max_hours_current.maxHours[self.peak_index]
+        _LOGGER.info("Updating Elvia Max Hours Peak")
 
-        else:
+        _meter_id = self.meter_id_from_unique_id()
+        if _meter_id is None:
             return
+
+        if max_hours is None:
+            return
+        max_hours_current = Elvia().extract_max_hours_current(max_hours)
+        if (
+            max_hours_current is None
+            or len(max_hours_current.maxHours) < self.peak_index
+        ):
+            return
+        peak_hour = max_hours_current.maxHours[self.peak_index]
 
         self._attr_native_value = round(peak_hour.value, 2)
         self._attr_extra_state_attributes = {
             "start_time": max_hours.maxHoursFromTime,
             "end_time": max_hours.maxHoursToTime,
         }
+
+        return super()._handle_coordinator_update()
 
     @property
     def icon(self) -> str:
@@ -346,15 +472,14 @@ class ElviaMaxHourPeakSensor(ElviaMeterSensor):
 class ElviaEnergyFixedLinkSensor(ElviaValueSensor):
     """Sensor for current fixed link cost."""
 
-    def __init__(self, elvia_instance: Elvia, name: str) -> None:
+    def __init__(self, name: str) -> None:
         """Class init. Default assignment."""
-        super().__init__(elvia_instance, name)
+        super().__init__(name)
 
         self._attr_state_class = SensorStateClass.TOTAL
         self._attr_device_class = SensorDeviceClass.MONETARY
         self._attr_native_unit_of_measurement = "NOK"
 
-        self._attr_native_value = 0.0
         self._attr_extra_state_attributes = {
             "start_time": None,
             "end_time": None,
@@ -362,13 +487,14 @@ class ElviaEnergyFixedLinkSensor(ElviaValueSensor):
 
     async def async_update(self) -> None:
         """Fetch new values for the sensor."""
-        period = self.elvia_instance.get_cost_period_now(now=dt_util.now())
+        elvia = Elvia()
+        period = elvia.get_cost_period_now(now=dt_util.now())
         if period is None:
             return
 
         self._attr_native_value = period.cost
 
-        periods = self.elvia_instance.get_cost_periods()
+        periods = elvia.get_cost_periods()
         day_period: CostTimeSpan = periods["day"]
         night_period: CostTimeSpan = periods["night"]
         weekend_period: CostTimeSpan = periods["weekend"]

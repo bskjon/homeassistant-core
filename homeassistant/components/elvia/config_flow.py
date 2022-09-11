@@ -1,6 +1,7 @@
 """Config flow for elvia integration."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -12,17 +13,30 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
-from .const import DOMAIN, INCLUDE_PRODUCTION_TO_GRID, TOKEN
-from .elvia import Elvia
+from .const import (
+    COST_PERIOD,
+    DOMAIN,
+    INCLUDE_PRODUCTION_TO_GRID,
+    MAX_HOURS,
+    METER,
+    METER_READING,
+    TOKEN,
+)
+from .elvia import ElviaApi
 
 _LOGGER = logging.getLogger(__name__)
 
+data_types: dict[str, int] = {"Max Hours": 0, "Meter Values": 1}
 
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(TOKEN): cv.string,
         #        vol.Optional(METER_ID, default=[]),
-        vol.Optional(INCLUDE_PRODUCTION_TO_GRID, default=False): cv.boolean
+        vol.Optional(INCLUDE_PRODUCTION_TO_GRID, default=False): cv.boolean,
+        vol.Optional(COST_PERIOD, default=True): cv.boolean,
+        vol.Optional(MAX_HOURS, default=True): cv.boolean,
+        vol.Optional(METER_READING, default=False): cv.boolean,
+        # vol.Required(DATA_TYPE): vol.In(list(data_types))
         #        vol.Required("username"): str,
         #        vol.Required("password"): str,
     }
@@ -43,7 +57,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     #     your_validate_func, data["username"], data["password"]
     # )
 
-    result = await Elvia(data[TOKEN]).get_meters()
+    result = await ElviaApi(data[TOKEN]).get_meters()
     # result: ElviaData = await asyncio.run(Elvia(data[TOKEN]).get_meters(), 1000)
 
     if result.status_code == 401:
@@ -59,7 +73,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     # InvalidAuth
 
     # Return info that you want to store in the config entry.
-    return {"title": "elvia", "token": data[TOKEN]}
+    return {"title": "elvia", "token": data[TOKEN], METER: result}
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -87,6 +101,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors["base"] = "invalid_auth"
         except RequestForbidden:
             errors["base"] = "forbidden_call"
+        except asyncio.TimeoutError:
+            errors["base"] = "timeout"
         except Exception:  # pylint: disable=broad-except
             _LOGGER.exception("Unexpected exception")
             errors["base"] = "unknown"

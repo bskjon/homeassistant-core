@@ -5,7 +5,10 @@
                 "data": {
                     "access_token": "Elvia tilgangsnøkkel",
                     "meter_id": "Måler id",
-                    "include_production_to_grid": "Inkluder produksjon til nettet"
+                    "include_production_to_grid": "Inkluder produksjon til nettet",
+                    "max_hours": "Topp timer",
+                    "meter_reading": "Måler avlesning",
+                    "grid_cost_period": "Nettleie per Kwh"
                 }
             }
         },
@@ -13,7 +16,9 @@
             "cannot_connect": "Kan ikke koble til Elvia",
             "invalid_auth": "Autentifikasjons nøkkelen er ugyldig",
             "forbidden_call": "Du har ikke tilatelse til å hente data",
-            "unknown": "Noe, noe virker ikke.."
+            "unknown": "Noe, noe virker ikke..",
+            "timeout": "Elvia svarte ikke"
+
         },
         "abort": {
             "already_configured": "Integration er allerede satt opp"

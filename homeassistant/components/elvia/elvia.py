@@ -65,7 +65,7 @@ class ElviaData:
         self.data = data
 
 
-class Elvia:
+class ElviaApi:
     """Communication class for elvia."""
 
     domain = "elvia.azure-api.net"
@@ -80,13 +80,18 @@ class Elvia:
         self.jwt = jwt
 
     # pylint: disable=invalid-name,broad-except,no-member
-    async def request_elvia_for_response(self, path) -> ElviaWebResponse:
+    async def request_elvia_for_response(
+        self, path, timeout_sec: int = 30
+    ) -> ElviaWebResponse:
         """Return WebResponse data from elvia."""
 
         headers = {"Authorization": "Bearer %s" % self.jwt}
-
-        async with aiohttp.ClientSession(headers=headers) as session:
+        request_timeout = aiohttp.ClientTimeout(total=timeout_sec)
+        async with aiohttp.ClientSession(
+            headers=headers, timeout=request_timeout
+        ) as session:
             url = "https://" + self.domain + path
+
             async with session.get(url) as response:
                 payload = await response.read()
                 json_string = str(payload, "utf-8")
@@ -95,30 +100,7 @@ class Elvia:
                 )
                 return elvia_response
 
-    async def update_meters(self) -> None:
-        """Return None. Executes request for meter ids."""
-        meter_data = await self.get_meters()
-        self.meter = meter_data
-
-    async def update_max_hours(self) -> None:
-        """Request update of max hours and store it in object/class."""
-        elvia_data = await self.get_max_hours()
-        if elvia_data.status_code != 200:
-            raise Exception("Elvia response is not OK!", elvia_data.data)
-        max_hours_data = elvia_data.data
-        if isinstance(max_hours_data, MaxHours) and max_hours_data is not None:
-            self.max_hours = max_hours_data
-
-    async def update_meter_values(self) -> None:
-        """Request update of meter values and store it in object/class."""
-        elvia_data = await self.get_max_hours()
-        if elvia_data.status_code != 200:
-            raise Exception("Elvia response is not OK!", elvia_data.data)
-        meter_values = elvia_data.data
-        if isinstance(meter_values, MeterValues) and meter_values is not None:
-            self.meter_values = meter_values
-
-    async def get_meters(self) -> Meter:
+    async def get_meters(self, timeout_sec: int = 30) -> Meter:
         """Return Meter with owned meter ids."""
         now = datetime.datetime.now(datetime.timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0
@@ -146,7 +128,10 @@ class Elvia:
 
     # pylint: disable=dangerous-default-value
     async def get_meter_values(
-        self, metering_ids: list[str] = [], include_production: bool = False
+        self,
+        metering_ids: list[str] = [],
+        include_production: bool = False,
+        timeout_sec: int = 30,
     ) -> ElviaData:
         """Return ElviaData with recorded meter values."""
 
@@ -171,7 +156,10 @@ class Elvia:
 
     # pylint: disable=dangerous-default-value
     async def get_max_hours(
-        self, metering_ids: list[str] = [], include_production: bool = False
+        self,
+        metering_ids: list[str] = [],
+        include_production: bool = False,
+        timeout_sec: int = 30,
     ) -> ElviaData:
         """Return ElviaData with recorded max hours.
 
@@ -195,6 +183,36 @@ class Elvia:
 
         max_hours: MaxHours = Pykson().from_json(response.json, MaxHours)
         return ElviaData(response.status_code, max_hours)
+
+    async def update_meters(self) -> None:
+        """Return None. Executes request for meter ids."""
+        meter_data = await self.get_meters()
+        self.meter = meter_data
+
+    async def update_max_hours(self) -> None:
+        """Request update of max hours and store it in object/class."""
+        elvia_data = await self.get_max_hours()
+        if elvia_data.status_code != 200:
+            raise Exception("Elvia response is not OK!", elvia_data.data)
+        max_hours_data = elvia_data.data
+        if isinstance(max_hours_data, MaxHours) and max_hours_data is not None:
+            self.max_hours = max_hours_data
+
+    async def update_meter_values(self) -> None:
+        """Request update of meter values and store it in object/class."""
+        elvia_data = await self.get_max_hours()
+        if elvia_data.status_code != 200:
+            raise Exception("Elvia response is not OK!", elvia_data.data)
+        meter_values = elvia_data.data
+        if isinstance(meter_values, MeterValues) and meter_values is not None:
+            self.meter_values = meter_values
+
+
+class Elvia:
+    """Communication class for elvia."""
+
+    def __init__(self) -> None:
+        """Class init. Returns nothing."""
 
     def extract_max_hours(
         self, meter_id: str, mtrpoints: list[meteringPointV2]
@@ -221,27 +239,33 @@ class Elvia:
             if point is None or len(point.maxHoursAggregate) == 0
             else point.maxHoursAggregate[0]
         )
-        return None if data is None or data.noOfMonthsBack != 0 else data
+        if data is None:
+            return data
+        if data.noOfMonthsBack != 0:
+            raise DataIsNotOfCurrentMonth(
+                f"Data is not of current, but of {data.noOfMonthsBack} months back"
+            )
+        return data
 
-    def get_grid_level(self, kw: float) -> int:
+    def get_grid_level(self, kwh: float) -> int:
         """Calculate the grid level based on kwh."""
-        if kw <= 2:
+        if kwh <= 2:
             return 1
-        if 5 >= kw > 2:
+        if 5 >= kwh > 2:
             return 2
-        if 10 >= kw > 5:
+        if 10 >= kwh > 5:
             return 3
-        if 15 >= kw > 10:
+        if 15 >= kwh > 10:
             return 4
-        if 20 >= kw > 15:
+        if 20 >= kwh > 15:
             return 5
-        if 25 >= kw > 20:
+        if 25 >= kwh > 20:
             return 6
-        if 50 >= kw > 25:
+        if 50 >= kwh > 25:
             return 7
-        if 75 >= kw > 50:
+        if 75 >= kwh > 50:
             return 8
-        if 100 >= kw > 75:
+        if 100 >= kwh > 75:
             return 9
         return 10
 
@@ -272,3 +296,7 @@ class Elvia:
             cost_time_span = periods["night"]
 
         return cost_time_span
+
+
+class DataIsNotOfCurrentMonth(Exception):
+    """Incorrect data exception occurred."""

@@ -9,8 +9,8 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .const import DOMAIN, TOKEN
-from .elvia import Elvia
+from .const import COST_PERIOD, MAX_HOURS, METER, METER_READING, TOKEN
+from .elvia import ElviaApi
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
@@ -19,11 +19,14 @@ PLATFORMS: list[Platform] = [Platform.SENSOR]
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up elvia from a config entry."""
 
-    elvia = Elvia(entry.data[TOKEN])
-    hass.data[DOMAIN] = elvia
+    hass.data[TOKEN] = entry.data[TOKEN]
+    hass.data[MAX_HOURS] = entry.data[MAX_HOURS]
+    hass.data[METER_READING] = entry.data[METER_READING]
+    hass.data[COST_PERIOD] = entry.data[COST_PERIOD]
 
     try:
-        await elvia.update_meters()
+        result = await ElviaApi(entry.data[TOKEN]).get_meters()
+        hass.data[METER] = result
     except asyncio.TimeoutError as err:
         raise ConfigEntryNotReady from err
 

@@ -41,6 +41,10 @@ class maxHourAggregate(JsonObject):
     uom = StringField(serialized_name="uom")
     noOfMonthsBack = IntegerField(serialized_name="noOfMonthsBack")
 
+    def __str__(self) -> str:
+        """Override default str in order to get data as a string."""
+        return f"Average {self.averageValue}Kwh, MaxHours {self.maxHours}"
+
 
 # pylint: disable=invalid-name
 class contractV2(JsonObject):
