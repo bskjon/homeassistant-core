@@ -364,6 +364,7 @@ FLOWS = {
         "steam_online",
         "steamist",
         "stookalert",
+        "strompris",
         "subaru",
         "sun",
         "surepetcare",
